@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>복소수 빈출 (1)</title>
+  <!-- MathJax 로드 -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+  <style>
+  /* 흑백 색 배색 */
+  body {
+    background-color: white;
+    color: black;
+    font-family: sans-serif;
+    margin: 20px;
+  }
+  .hidden {
+    display: none;
+  }
+  .energy-bar {
+    width: 200px;
+    height: 20px;
+    background-color: black; /* 에너지바 바탕 */
+    margin-bottom: 10px;
+  }
+  .energy-bar-fill {
+    height: 20px;
+    background-color: white; /* 줄어드는 부분 */
+    width: 100%;
+  }
+  .btn {
+    background-color: black;
+    color: white;
+    padding: 6px 12px;
+    margin: 5px;
+    border: none;
+    cursor: pointer;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  #response {
+    white-space: pre-wrap;
+    border: 1px solid black;
+    padding: 10px;
+    margin-top: 10px;
+    max-width: 400px;
+    overflow-wrap: break-word;
+  }
+  </style>
+</head>
+<body>
+
+<h1>복소수 빈출 (1)</h1>
+
+<!-- 첫 화면: 이름 입력, 난이도 선택 -->
+<div id="start-screen">
+  <label>이름: <input type="text" id="player-name"></label><br><br>
+  난이도 선택:<br>
+  <label><input type="radio" name="difficulty" value="최상">최상 (20초, +20점)</label><br>
+  <label><input type="radio" name="difficulty" value="상">상 (30초, +15점)</label><br>
+  <label><input type="radio" name="difficulty" value="중">중 (40초, +13점)</label><br>
+  <label><input type="radio" name="difficulty" value="하" checked>하 (시간 제한 없음, +10점)</label><br><br>
+  <button class="btn" onclick="startGame()">게임 시작</button>
+</div>
+
+<!-- 게임 진행 화면 -->
+<div id="game-screen" class="hidden">
+  <!-- 전체 게임 시간 / 남은 기회 / 점수 표시 -->
+  <div>전체 게임 시간: <span id="elapsed-time">0</span>초</div>
+  <div>남은 기회: <span id="lives">3</span></div>
+  <div>점수: <span id="score">0</span></div>
+
+  <!-- 에너지바 (난이도에 따라 시간제한이 있을 경우만 감소) -->
+  <div class="energy-bar" id="energy-bar">
+    <div class="energy-bar-fill" id="energy-bar-fill"></div>
+  </div>
+  
+  <!-- 문제와 보기 표시 영역 -->
+  <div id="question-container"></div>
+  
+  <!-- 정답/오답 피드백 영역 -->
+  <div id="feedback"></div>
+  
+  <!-- '다음 문제' 버튼 (정답 제출 이후/시간 만료 이후에만 활성) -->
+  <button class="btn" id="next-button" disabled onclick="nextQuestion()">다음 문제</button>
+</div>
+
+<!-- 게임 종료 후 화면 -->
+<div id="end-screen" class="hidden">
+  <h2>게임 종료</h2>
+  <div>최종 점수: <span id="final-score">0</span></div>
+  <div>총 경과 시간: <span id="final-time">0</span>초</div>
+  <button class="btn" onclick="sendScore()">점수전송</button>
+  <div id="response"></div>
+</div>
+
+<script>
+/*
+  [점수 전송 함수]
+  - game: "복소수 빈출 (1)" 등의 게임 이름
+  - name: 플레이어 이름
+  - score: 최종 점수 (정수)
+  - elapsedTime: 전체 경과 시간(초 단위, 정수)
+
+  아래 함수를 호출하면 서버에 POST 요청을 시도하고,
+  응답 성공/실패/오류 여부를 #response 영역에 표시합니다.
+*/
+function saveData(game, name, score, elapsedTime) {
+    const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+    const requestData = {
+        game,
+        name,
+        score: parseInt(score, 10),
+        elapsedTime: parseInt(elapsedTime, 10)
+    };
+
+    fetch(FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+    })
+    .then(async response => {
+        const responseData = await response.json();
+        if (response.ok) {
+            document.getElementById('response').innerText =
+                "성공: " + JSON.stringify(responseData, null, 2);
+        } else {
+            document.getElementById('response').innerText =
+                "오류: " + JSON.stringify(responseData, null, 2);
+        }
+    })
+    .catch(error => {
+        console.error('요청 실패:', error);
+        document.getElementById('response').innerText =
+            "네트워크 오류: " + error.message;
+    });
+}
+
+/* 
+  위에서 정답이 확정된 복소수 문제들을 모두 합쳐, 
+  총 15문항을 배열에 저장해 둡니다. 
+  (문항번호는 화면에 표시하지 않고, 무작위로 출제)
+*/
+const allQuestions = [
+  // 1) Set1 #1
+  {
+    question: "복소수에 대한 설명 중 옳은 것은?",
+    choices: [
+      { text: "\\(i^2 = 1\\)", isCorrect: false },
+      { text: "\\(2 + 5i\\)는 순허수이다", isCorrect: false },
+      { text: "\\(-1+3i\\)의 켤레복소수는 \\(1 - 3i\\)", isCorrect: false },
+      { text: "\\(5 - 2i\\)의 실수부는 5, 허수부는 -2", isCorrect: true },
+      { text: "두 실수 \\(a,b\\)에 대하여 \\(a+bi\\)가 실수이면 \\(a=0, b=0\\)", isCorrect: false }
+    ]
+  },
+  // 2) Set1 #2
+  {
+    question: "다음 식 \\(\\Bigl(\\dfrac{1 - i}{2i}\\Bigr) + \\Bigl(\\dfrac{1 - 2i}{1 + i}\\Bigr)\\)의 값은?",
+    choices: [
+      { text: "\\(-1 - 2i\\)", isCorrect: true },
+      { text: "\\(-2i\\)", isCorrect: false },
+      { text: "\\(1 - i\\)", isCorrect: false },
+      { text: "\\(1 + 2i\\)", isCorrect: false },
+      { text: "\\(1 - 2i\\)", isCorrect: false }
+    ]
+  },
+  // 3) Set1 #3
+  {
+    question: "복소수 \\(z = a(2+i) -1 + 2i\\)에서 \\(z^2\\)가 실수가 되게 하는 모든 실수 \\(a\\)의 곱은?",
+    choices: [
+      { text: "-2", isCorrect: false },
+      { text: "-1", isCorrect: true },
+      { text: "1/2", isCorrect: false },
+      { text: "1", isCorrect: false },
+      { text: "2", isCorrect: false }
+    ]
+  },
+  // 4) Set1 #4
+  {
+    question: "\\(\\dfrac{a}{2+i} + \\dfrac{b}{2-i} = 2 - 3i\\) 를 만족하는 실수 \\(a,b\\)에 대하여 \\(\\dfrac{a}{b}\\)의 값은?",
+    choices: [
+      { text: "0", isCorrect: false },
+      { text: "-1", isCorrect: false },
+      { text: "-2", isCorrect: true },
+      { text: "-3", isCorrect: false },
+      { text: "-4", isCorrect: false }
+    ]
+  },
+  // 5) Set1 #6
+  {
+    question: "급수 \\( i - 2i^2 + 3i^3 - 4i^4 + \\dots - 50i^{50}\\)의 합을 \\(a + b i\\)라 할 때, \\(a + b\\)의 값은?",
+    choices: [
+      { text: "-147", isCorrect: false },
+      { text: "-48", isCorrect: false },
+      { text: "0", isCorrect: false },
+      { text: "51", isCorrect: true },
+      { text: "99", isCorrect: false }
+    ]
+  },
+  // 6) Set1 #7
+  {
+    question: "등식 \\(\\dfrac{1}{i} - \\dfrac{1}{i^2} + \\dfrac{1}{i^3} - \\dfrac{1}{i^4} + \\dots + (-1)^{n+1}\\dfrac{1}{i^n} = -i\\) 를 만족시키는 \\(n\\le60\\) 자연수 \\(n\\)의 개수?",
+    choices: [
+      { text: "13", isCorrect: false },
+      { text: "14", isCorrect: false },
+      { text: "15", isCorrect: true },
+      { text: "16", isCorrect: false },
+      { text: "17", isCorrect: false }
+    ]
+  },
+  // 7) Set1 #8
+  {
+    question: "\\(\\Bigl(\\dfrac{1+i}{1-i}\\Bigr)^{150} + \\Bigl(\\dfrac{1-i}{1+i}\\Bigr)^{100}\\)의 값은?",
+    choices: [
+      { text: "\\(-i\\)", isCorrect: false },
+      { text: "\\(-1\\)", isCorrect: false },
+      { text: "0", isCorrect: true },
+      { text: "1", isCorrect: false },
+      { text: "i", isCorrect: false }
+    ]
+  },
+  // 8) Set2 #2
+  {
+    question: "\\((2 - i)(4 + i) + \\dfrac{10i}{1 - 3i} = a + b i\\). 이때 \\(a+b\\)의 값은?",
+    choices: [
+      { text: "1", isCorrect: false },
+      { text: "3", isCorrect: false },
+      { text: "5", isCorrect: true },
+      { text: "7", isCorrect: false },
+      { text: "9", isCorrect: false }
+    ]
+  },
+  // 9) Set2 #3
+  {
+    question: "\\(z = (1+2i)x - (3+4i)\\)에서 \\(z^2\\)가 음의 실수가 되도록 하는 실수 \\(x\\)는?",
+    choices: [
+      { text: "1", isCorrect: false },
+      { text: "2", isCorrect: false },
+      { text: "3", isCorrect: true },
+      { text: "4", isCorrect: false },
+      { text: "5", isCorrect: false }
+    ]
+  },
+  // 10) Set2 #4
+  {
+    question: "\\((1+i)x + (1-i)y = 2\\)를 만족하는 실수 \\(x,y\\)에 대하여 \\(xy\\)의 값은?",
+    choices: [
+      { text: "1", isCorrect: true },
+      { text: "2", isCorrect: false },
+      { text: "3", isCorrect: false },
+      { text: "4", isCorrect: false },
+      { text: "5", isCorrect: false }
+    ]
+  },
+  // 11) Set2 #5
+  {
+    question: "복소수 \\(z = a+bi\\) \\((a,b\\neq 0)\\)가 \\(-iz = \\overline{z}\\)를 만족할 때, <보기>에서 옳은 것만 고른 것은?",
+    choices: [
+      { text: "ㄱ", isCorrect: false },
+      { text: "ㄴ", isCorrect: false },
+      { text: "ㄷ", isCorrect: false },
+      { text: "ㄱ, ㄴ", isCorrect: false },
+      { text: "ㄱ, ㄴ, ㄷ", isCorrect: true }
+    ]
+  },
+  // 12) Set2 #6
+  {
+    question: "\\(f(n) = i^n + \\dfrac{1}{i^n}\\). \\(f(1)+f(2)+\\dots+f(11)\\)의 값은?",
+    choices: [
+      { text: "-2", isCorrect: true },
+      { text: "-1", isCorrect: false },
+      { text: "0", isCorrect: false },
+      { text: "1", isCorrect: false },
+      { text: "2", isCorrect: false }
+    ]
+  },
+  // 13) Set2 #7
+  {
+    question: "10보다 작은 자연수 \\(n\\)에 대하여 \\(f(n)= i^n + \\dfrac{1}{i^n}\\). \\(f(n)=0\\)을 만족하는 모든 \\(n\\)의 합?",
+    choices: [
+      { text: "10", isCorrect: false },
+      { text: "15", isCorrect: false },
+      { text: "20", isCorrect: false },
+      { text: "25", isCorrect: true },
+      { text: "30", isCorrect: false }
+    ]
+  },
+  // 14) Set2 #8
+  {
+    question: "복소수 \\(z = \\dfrac{1 + i}{\\sqrt{2}}\\)에 대하여 \\(\\dfrac{z}{\\overline{z}} + \\dfrac{z^3}{\\overline{z}^3} + \\dots + \\dfrac{z^9}{\\overline{z}^9}\\)의 값은?",
+    choices: [
+      { text: "\\(-1\\)", isCorrect: false },
+      { text: "\\(-i\\)", isCorrect: false },
+      { text: "0", isCorrect: false },
+      { text: "i", isCorrect: true },
+      { text: "1", isCorrect: false }
+    ]
+  },
+  // 15) Set2 #9
+  {
+    question: "\\(\\Bigl(\\dfrac{1 + i}{\\sqrt{2}}\\Bigr)^{n} = 1\\), \\(1 \\le n \\le 2020\\). 이때 \\(n\\)의 개수는?",
+    choices: [
+      { text: "127", isCorrect: false },
+      { text: "252", isCorrect: true },
+      { text: "254", isCorrect: false },
+      { text: "504", isCorrect: false },
+      { text: "505", isCorrect: false }
+    ]
+  }
+];
+
+// 전역 상태 변수들
+let currentQuestionIndex = 0;     // 현재 문제 (처음에는 0)
+let shuffledQuestions = [];       // 문제 무작위 배열
+let usedQuestions = [];           // 1바퀴 돌 때 사용한 문제들
+let score = 0;                    // 점수
+let lives = 3;                    // 남은 기회 (3회)
+let totalStartTime = 0;           // 전체 게임 시작 시각 (Date.now())
+let totalElapsed = 0;             // 지금까지 경과한 전체 시간(초)
+let intervalId = null;            // 전체 시간 업데이트용 setInterval
+let questionTimerId = null;       // 개별 문제 시간 제한용
+let questionTimeLimit = 0;        // 문제당 제한(초)
+let infiniteTime = false;         // 난이도 '하'인 경우 시간 무제한
+let difficultyScore = 10;         // 난이도별 문제 정답 시 획득점수
+
+// 배열 무작위 섞기 함수
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+// 게임 시작
+function startGame() {
+  const nameInput = document.getElementById("player-name");
+  if (!nameInput.value) {
+    alert("이름을 입력하세요.");
+    return;
+  }
+
+  // 난이도 체크
+  const difficultyRadios = document.getElementsByName("difficulty");
+  let selectedDiff = "하"; // 기본값
+  for (let r of difficultyRadios) {
+    if (r.checked) {
+      selectedDiff = r.value;
+      break;
+    }
+  }
+
+  // 난이도별 시간·점수 설정
+  infiniteTime = false;
+  if (selectedDiff === "최상") {
+    questionTimeLimit = 20;
+    difficultyScore = 20;
+  } else if (selectedDiff === "상") {
+    questionTimeLimit = 30;
+    difficultyScore = 15;
+  } else if (selectedDiff === "중") {
+    questionTimeLimit = 40;
+    difficultyScore = 13;
+  } else {
+    // '하'
+    infiniteTime = true;
+    difficultyScore = 10;
+  }
+
+  // 초기화
+  lives = 3;
+  score = 0;
+  totalElapsed = 0;
+
+  // 문제 무작위 순서로 섞기
+  shuffledQuestions = [...allQuestions];
+  shuffleArray(shuffledQuestions);
+
+  currentQuestionIndex = 0;
+  usedQuestions = [];
+
+  // 화면 전환
+  document.getElementById("start-screen").classList.add("hidden");
+  document.getElementById("game-screen").classList.remove("hidden");
+  document.getElementById("end-screen").classList.add("hidden");
+
+  // 기본 표시 초기화
+  document.getElementById("lives").textContent = lives;
+  document.getElementById("score").textContent = score;
+  document.getElementById("elapsed-time").textContent = "0";
+
+  // 전체 시간 타이머 시작
+  totalStartTime = Date.now();
+  if (intervalId) clearInterval(intervalId);
+  intervalId = setInterval(updateGlobalTime, 1000);
+
+  // 첫 문제 로드
+  loadQuestion();
+}
+
+// 1초마다 전체 경과 시간 업데이트
+function updateGlobalTime() {
+  totalElapsed = Math.floor((Date.now() - totalStartTime) / 1000);
+  document.getElementById("elapsed-time").textContent = totalElapsed;
+}
+
+// 문제 로드 (한 바퀴를 다 돌면 전체에서 랜덤, 아니면 섞어둔 배열 순서대로)
+function loadQuestion() {
+  // 혹시 이전 문제 타이머가 살아 있으면 중단
+  if (questionTimerId) {
+    clearInterval(questionTimerId);
+    questionTimerId = null;
+  }
+
+  // 첫 바퀴(전체) 끝났으면 임의로 계속
+  if (currentQuestionIndex >= shuffledQuestions.length) {
+    const randomIdx = Math.floor(Math.random() * allQuestions.length);
+    showQuestion(allQuestions[randomIdx]);
+  } else {
+    const q = shuffledQuestions[currentQuestionIndex];
+    currentQuestionIndex++;
+    usedQuestions.push(q);
+    showQuestion(q);
+  }
+}
+
+// 실제 문제와 보기를 화면에 뿌리는 함수
+function showQuestion(q) {
+  const container = document.getElementById("question-container");
+  container.innerHTML = "";
+
+  // 보기(choices)도 내부에서 무작위 섞기
+  const choices = [...q.choices];
+  shuffleArray(choices);
+
+  // 문제문 표시
+  const questionElem = document.createElement("div");
+  questionElem.innerHTML = q.question;
+  container.appendChild(questionElem);
+
+  // 라디오 버튼 형태로 보기 표시
+  for (let i = 0; i < choices.length; i++) {
+    const c = choices[i];
+    const choiceDiv = document.createElement("div");
+    const choiceId = "choice-" + i;
+    choiceDiv.innerHTML = `
+      <label>
+        <input type="radio" name="choice" value="${i}">
+        <span>${c.text}</span>
+      </label>
+    `;
+    container.appendChild(choiceDiv);
+  }
+
+  // '정답 제출' 버튼
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "btn";
+  submitBtn.textContent = "정답 제출";
+  submitBtn.onclick = function () {
+    checkAnswer(q, choices);
+  };
+  container.appendChild(submitBtn);
+
+  // 피드백, 다음문제 버튼 초기화
+  document.getElementById("feedback").textContent = "";
+  document.getElementById("next-button").disabled = true;
+
+  // 문제별 시간 제한 타이머
+  if (!infiniteTime) {
+    let perQuestionTimeRemaining = questionTimeLimit;
+    updateEnergyBar(perQuestionTimeRemaining);
+
+    questionTimerId = setInterval(() => {
+      perQuestionTimeRemaining--;
+      if (perQuestionTimeRemaining < 0) {
+        // 시간 초과 -> 기회 1 감소 후 다음문제 자동
+        clearInterval(questionTimerId);
+        questionTimerId = null;
+        loseLife(true);
+      } else {
+        updateEnergyBar(perQuestionTimeRemaining);
+      }
+    }, 1000);
+  } else {
+    // 무제한이면 에너지바 100%
+    document.getElementById("energy-bar-fill").style.width = "100%";
+  }
+
+  // 수식 재렌더링
+  MathJax.typeset();
+}
+
+// 에너지바(시간 시각화) 업데이트
+function updateEnergyBar(remaining) {
+  if (infiniteTime) {
+    document.getElementById("energy-bar-fill").style.width = "100%";
+    return;
+  }
+  const ratio = remaining / questionTimeLimit;
+  document.getElementById("energy-bar-fill").style.width = (ratio * 100) + "%";
+}
+
+// '정답 제출' 시 호출. 선택한 답안이 맞는지 확인
+function checkAnswer(q, choices) {
+  const radios = document.getElementsByName("choice");
+  let selectedIndex = -1;
+  for (let r of radios) {
+    if (r.checked) {
+      selectedIndex = parseInt(r.value);
+      break;
+    }
+  }
+  if (selectedIndex === -1) {
+    alert("답을 선택하세요!");
+    return;
+  }
+
+  // 남은 문제 타이머 중단
+  if (questionTimerId) {
+    clearInterval(questionTimerId);
+    questionTimerId = null;
+  }
+
+  // 채점
+  const feedback = document.getElementById("feedback");
+  const isCorrect = choices[selectedIndex].isCorrect;
+  if (isCorrect) {
+    score += difficultyScore; // 난이도별 점수 가산
+    feedback.textContent = "정답입니다!";
+  } else {
+    feedback.textContent = "오답입니다! 정답을 공개합니다.\n";
+    // 정답 보기 출력
+    for (let c of choices) {
+      if (c.isCorrect) {
+        feedback.textContent += "정답: " + c.text;
+        break;
+      }
+    }
+    loseLife(false);
+  }
+  document.getElementById("score").textContent = score;
+
+  // '다음 문제' 버튼 활성
+  document.getElementById("next-button").disabled = false;
+
+  // 수식 재렌더링
+  MathJax.typeset();
+}
+
+// 기회(목숨) 1 감소
+// skipNext=true 이면 즉시 다음 문제로 넘어감(시간초과 등)
+function loseLife(skipNext = false) {
+  lives--;
+  document.getElementById("lives").textContent = lives;
+  if (lives <= 0) {
+    endGame();
+  } else {
+    if (skipNext) {
+      nextQuestion();
+    }
+  }
+}
+
+// '다음 문제' 버튼
+function nextQuestion() {
+  if (lives <= 0) {
+    endGame();
+    return;
+  }
+  loadQuestion();
+}
+
+// 3번 틀리거나 시간이 다 소진되어 lives=0이 되면 게임 종료
+function endGame() {
+  // 타이머 정리
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+  if (questionTimerId) {
+    clearInterval(questionTimerId);
+    questionTimerId = null;
+  }
+
+  // 화면 전환
+  document.getElementById("game-screen").classList.add("hidden");
+  document.getElementById("end-screen").classList.remove("hidden");
+
+  document.getElementById("final-score").textContent = score;
+  document.getElementById("final-time").textContent = totalElapsed;
+}
+
+// '점수전송' 버튼
+function sendScore() {
+  const nameInput = document.getElementById("player-name").value || "unknown";
+  saveData("복소수 빈출 (1)", nameInput, score, totalElapsed);
+}
+</script>
+
+</body>
+</html>
